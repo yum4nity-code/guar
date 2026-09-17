@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import argparse,bisect,csv,hashlib,json,math,os,statistics
+from collections import deque
+from dataclasses import dataclass,field
+from datetime import date,datetime,timedelta,timezone
+from pathlib import Path
+from typing import Any,Iterable
+from data_loader_v1 import AdmissionError,Bar,decode_dukascopy_m1_day,load_dukascopy_index
+from preflight_v1 import PINNED_MANIFEST_SHA256,canonical_manifest_sha256,validate_manifest
+
+UTC=timezone.utc
+ID="GUARDIAN-NIGHT-ATLAS-V1"
+PROTOCOL_VERSION="GUARDIAN-RESEARCH-PROTOCOL-V1"
+OBS_SCHEMA_VERSION="1.0.0"
+WARMUP_START=datetime(2016,11,1,tzinfo=UTC)
+DISCOVERY_START=datetime(2017,1,1,tzinfo=UTC)
+END_EXCLUSIVE=datetime(2023,1,1,tzinfo=UTC)
+MAX_HORIZON_MIN=240
+HORIZONS=(5,15,30,60,120,240)
+COSTS=(0.00,0.05,0.10,0.15,0.20)
+THRESHOLDS_R=(0.5,1.0,1.5,2.0)
+SHOCK3_ATR=1.5
+VOLBAR_ATR=2.0
+EDGE96_FRACTION=0.05
+WICK_MIN_RANGE_ATR=1.0
+WICK_FRACTION=0.50
+WICK_CLOSE_OPPOSITE=0.35
+DAYOPEN_EXTREME_ATR=1.5
+COMPRESSION_PERCENTILE=0.20
+COMPRESSION_MIN_HISTORY=500
+COMPRESSION_ROLLING_BARS=4032
+
+FAMILY_SPECS=[
+{"family":"F01_STREAK3","variants":["REV","CONT"],"hypothesis":"Three same-direction M5 closes may revert or continue."},
+{"family":"F02_SHOCK3","variants":["REV","CONT"],"hypothesis":"Large 3-bar ATR-normalized impulses may overreact or persist."},
+{"family":"F03_VOLBAR","variants":["REV","CONT"],"hypothesis":"Single-bar volatility shocks may revert or persist."},
+{"family":"F04_FAILED_BREAK48","variants":["REV"],"hypothesis":"Pierce and reclaim of prior 48-M5 range may reverse."},
+{"family":"F05_FAILED_BREAK96","variants":["REV"],"hypothesis":"Pierce and reclaim of prior 96-M5 range may reverse."},
+{"family":"F06_BREAK48","variants":["CONT"],"hypothesis":"Close beyond prior 48-M5 range may continue."},
+{"family":"F07_BREAK96","variants":["CONT"],"hypothesis":"Close beyond prior 96-M5 range may continue."},
+{"family":"F08_EDGE96","variants":["REV"],"hypothesis":"Close near, but inside, a 96-M5 range edge may mean-revert."},
+{"family":"F09_WICK_REJECT","variants":["REV"],"hypothesis":"Large rejection wick may predict reversal."},
+{"family":"F10_NR7_RELEASE","variants":["CONT"],"hypothesis":"Release after narrowest-of-7 compression may continue."},
+{"family":"F11_INSIDE_RELEASE","variants":["CONT"],"hypothesis":"Break from an inside-bar compression may continue."},
+{"family":"F12_SESSION30","variants":["REV","CONT"],"hypothesis":"First 30-min block of 00/06/12/18 UTC may reverse or continue."},
+{"family":"F13_PDAY_BREAK","variants":["CONT"],"hypothesis":"Close beyond previous UTC-day high/low may continue."},
+{"family":"F14_PDAY_FAILED","variants":["REV"],"hypothesis":"Previous-day high/low pierce and reclaim may reverse."},
+{"family":"F15_WEEKEND_GAP","variants":["REV","CONT"],"hypothesis":"Monday UTC open gap may reverse or continue."},
+{"family":"F16_DAYOPEN_EXTREME","variants":["REV"],"hypothesis":"First large excursion from UTC day open may mean-revert."},
+{"family":"F17_COMPRESSION12","variants":["CONT"],"hypothesis":"Break after unusually compressed prior 12 M5 bars may expand."},
+]
+
+def file_sha256(path:Path)->str:
+    h=hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda:f.read(1024*1024),b""): h.update(chunk)
+    return h.hexdigest()
+
+def admitted_rows(manifest_path:Path):
+    if not manifest_path.is_file(): raise AdmissionError("manifest absent")
+    if "production" in {x.lower() for x in manifest_path.resolve().parts}: raise AdmissionError("production input path forbidden")
+    if canonical_manifest_sha256(manifest_path)!=PINNED_MANIFEST_SHA256: raise AdmissionError("manifest hash mismatch")
+    manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
+    datasets=validate_manifest(manifest)
+    duka=datasets["DUKASCOPY_XAUUSD_BID_M1_BI5_2004_2025"]
+    if duka["asset"]!="XAUUSD" or duka["timezone"]!="UTC" or duka["granularity"]!="M1": raise AdmissionError("Night Atlas requires XAUUSD UTC M1")
+    rows=load_dukascopy_index(Path(duka["payload_index"]),duka["payload_index_sha256"])
+    for row in rows:
+        day=datetime.fromisoformat(row["date"]).replace(tzinfo=UTC)
+        if WARMUP_START<=day<END_EXCLUSIVE: yield row
+
+class WilderRSI:
+    def __init__(self,period=14):
+        self.period=period;self.previous=None;self.gains=deque(maxlen=period);self.losses=deque(maxlen=period)
+        self.avg_gain=None;self.avg_loss=None;self.value=None;self.available_at=None
+    def update(self,close,available_at):
+        if self.previous is None:
+            self.previous=close;self.available_at=available_at;return
+        d=close-self.previous;g=max(d,0.0);l=max(-d,0.0)
+        if self.avg_gain is None:
+            self.gains.append(g);self.losses.append(l)
+            if len(self.gains)==self.period:
+                self.avg_gain=sum(self.gains)/self.period;self.avg_loss=sum(self.losses)/self.period
+        else:
+            self.avg_gain=((self.avg_gain*(self.period-1))+g)/self.period
+            self.avg_loss=((self.avg_loss*(self.period-1))+l)/self.period
+        if self.avg_gain is not None and self.avg_loss is not None:
+            if self.avg_loss==0:self.value=100.0 if self.avg_gain>0 else 50.0
+            else:
+                rs=self.avg_gain/self.avg_loss;self.value=100.0-100.0/(1.0+rs)
+        self.previous=close;self.available_at=available_at
+
+class WilderATR:
+    def __init__(self,period=14):
+        self.period=period;self.previous_close=None;self.initial=deque(maxlen=period);self.value=None;self.available_at=None
+    def update(self,bar):
+        if self.previous_close is None:
+            self.previous_close=bar.close;self.available_at=bar.available_at;return
+        tr=max(bar.high-bar.low,abs(bar.high-self.previous_close),abs(bar.low-self.previous_close))
+        if self.value is None:
+            self.initial.append(tr)
+            if len(self.initial)==self.period:self.value=sum(self.initial)/self.period
+        else:self.value=((self.value*(self.period-1))+tr)/self.period
+        self.previous_close=bar.close;self.available_at=bar.available_at
+
+class Aggregator:
+    def __init__(self,minutes):self.minutes=minutes;self.bucket=[]
+    def push(self,bar):
+        if not self.bucket:
+            if bar.timestamp.minute%self.minutes: raise AdmissionError(f"M{self.minutes} bucket misaligned")
+        elif bar.timestamp-self.bucket[-1].timestamp!=timedelta(minutes=1): raise AdmissionError(f"M1 gap inside M{self.minutes}")
+        self.bucket.append(bar)
+        if len(self.bucket)<self.minutes:return None
+        if len(self.bucket)>self.minutes:raise AdmissionError("aggregator overflow")
+        b=Bar(self.bucket[0].timestamp,self.bucket[-1].available_at,self.bucket[0].open,max(x.high for x in self.bucket),min(x.low for x in self.bucket),self.bucket[-1].close,sum((x.volume or 0.0) for x in self.bucket))
+        self.bucket=[];return b
+
+class RollingSorted:
+    def __init__(self,maxlen):self.maxlen=maxlen;self.queue=deque();self.sorted=[]
