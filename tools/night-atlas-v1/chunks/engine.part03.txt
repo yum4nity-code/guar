@@ -1,0 +1,58 @@
+ilable_at":iso(self.rsi5.available_at),"rsi_m15_available_at":iso(self.rsi15.available_at),"rsi_aligned_extreme_count":aligned_rsi(side,(self.rsi1.value,self.rsi5.value,self.rsi15.value)),"atr_m1":self.atr1.value,"atr_m5":atr,"atr_m15":self.atr15.value,"rv12":rv12,"rv48":rv48,"vol_ratio_12_48":safe_div(rv12,rv48),"ret1_price":ret(1),"ret3_price":ret(3),"ret6_price":ret(6),"ret12_price":ret(12),"ret1_atr":ret(1)/atr,"ret3_atr":ret(3)/atr,"ret6_atr":ret(6)/atr,"ret12_atr":ret(12)/atr,"streak_dir":sdir,"streak_len":slen,"signal_bar_range":cf["range"],"signal_bar_body":cf["body"],"signal_bar_upper_wick":cf["upper_wick"],"signal_bar_lower_wick":cf["lower_wick"],"signal_bar_body_frac":cf["body_frac"],"signal_bar_upper_wick_frac":cf["upper_wick_frac"],"signal_bar_lower_wick_frac":cf["lower_wick_frac"],"signal_bar_close_loc":cf["close_loc"],"signal_bar_range_atr":cf["range_atr"],"signal_bar_volume":sb.volume,"day_open":self.day_open,"dist_day_open_atr":safe_div(sb.close-self.day_open if self.day_open is not None else None,atr),"prev_day_high":self.prev_day["high"] if self.prev_day else None,"prev_day_low":self.prev_day["low"] if self.prev_day else None,"prev_day_close":self.prev_day["close"] if self.prev_day else None,"dist_prev_day_high_atr":safe_div(sb.close-self.prev_day["high"] if self.prev_day else None,atr),"dist_prev_day_low_atr":safe_div(sb.close-self.prev_day["low"] if self.prev_day else None,atr),"round1_distance":nearest_distance(entry,1.0),"round5_distance":nearest_distance(entry,5.0),"round10_distance":nearest_distance(entry,10.0),"compression12_ratio":comp_ratio,"compression12_percentile":comp_pct,"event_strength":strength,"event_aux":aux,"protected_2023_plus_opened":False,"protected_2026_opened":False})
+        for n in (12,24,48,96,192):row[f"range{n}_loc"]=rr[n]["loc"];row[f"range{n}_width_atr"]=rr[n]["width"]/atr
+        row["range48_break_atr"]=r48/atr;row["range96_break_atr"]=r96/atr
+        return row
+    def add(self,t,entry,side,fam,var,strength=None,aux=None,comp_ratio=None,comp_pct=None):
+        if not (DISCOVERY_START<=t<END_EXCLUSIVE-timedelta(minutes=MAX_HORIZON_MIN)):return
+        row=self.snapshot(t,entry,side,fam,var,strength,aux,comp_ratio,comp_pct);self.pending.append(Pending(row,side,entry,float(row["risk"])));self.signals+=1
+        k=f"{fam}|{var}";self.family_counts[k]=self.family_counts.get(k,0)+1
+    def detect(self,t,entry):
+        hist=list(self.m5_hist)
+        if len(hist)<193 or any(x is None for x in (self.atr5.value,self.rsi1.value,self.rsi5.value,self.rsi15.value)):return
+        sb=hist[-1];atr=self.atr5.value
+        for ts in (sb.available_at,self.rsi1.available_at,self.rsi5.available_at,self.rsi15.available_at,self.atr5.available_at):
+            if ts is not None and ts>t:raise AdmissionError("lookahead")
+        prior12=hist[-13:-1];chi=max(b.high for b in prior12);clo=min(b.low for b in prior12);cr=(chi-clo)/atr;cp=self.comp.rank(cr)
+        dirs=[sign(hist[i].close-hist[i-1].close) for i in range(len(hist)-3,len(hist))]
+        if dirs[0] and len(set(dirs))==1:
+            d=dirs[0];z=abs(hist[-1].close-hist[-4].close)/atr;self.add(t,entry,-d,"F01_STREAK3","REV",z,None,cr,cp);self.add(t,entry,d,"F01_STREAK3","CONT",z,None,cr,cp)
+        move3=hist[-1].close-hist[-4].close;z=abs(move3)/atr
+        if sign(move3) and z>=SHOCK3_ATR:
+            d=sign(move3);self.add(t,entry,-d,"F02_SHOCK3","REV",z,None,cr,cp);self.add(t,entry,d,"F02_SHOCK3","CONT",z,None,cr,cp)
+        prev=hist[-2].close;tr=max(sb.high-sb.low,abs(sb.high-prev),abs(sb.low-prev));zb=tr/atr;db=sign(sb.close-sb.open)
+        if db and zb>=VOLBAR_ATR:self.add(t,entry,-db,"F03_VOLBAR","REV",zb,(sb.close-sb.open)/atr,cr,cp);self.add(t,entry,db,"F03_VOLBAR","CONT",zb,(sb.close-sb.open)/atr,cr,cp)
+        for n,ff,bf in ((48,"F04_FAILED_BREAK48","F06_BREAK48"),(96,"F05_FAILED_BREAK96","F07_BREAK96")):
+            p=hist[-n-1:-1];hi=max(b.high for b in p);lo=min(b.low for b in p)
+            if sb.high>hi and sb.close<=hi:self.add(t,entry,-1,ff,"REV",(sb.high-hi)/atr,(hi-sb.close)/atr,cr,cp)
+            if sb.low<lo and sb.close>=lo:self.add(t,entry,1,ff,"REV",(lo-sb.low)/atr,(sb.close-lo)/atr,cr,cp)
+            if sb.close>hi:self.add(t,entry,1,bf,"CONT",(sb.close-hi)/atr,None,cr,cp)
+            elif sb.close<lo:self.add(t,entry,-1,bf,"CONT",(lo-sb.close)/atr,None,cr,cp)
+        p=hist[-97:-1];hi=max(b.high for b in p);lo=min(b.low for b in p);w=hi-lo
+        if w>0 and lo<=sb.close<=hi:
+            loc=(sb.close-lo)/w
+            if loc<=EDGE96_FRACTION:self.add(t,entry,1,"F08_EDGE96","REV",EDGE96_FRACTION-loc,loc,cr,cp)
+            elif loc>=1-EDGE96_FRACTION:self.add(t,entry,-1,"F08_EDGE96","REV",loc-(1-EDGE96_FRACTION),loc,cr,cp)
+        cf=candle_features(sb,atr)
+        if (cf["range_atr"] or 0)>=WICK_MIN_RANGE_ATR and cf["close_loc"] is not None:
+            if (cf["upper_wick_frac"] or 0)>=WICK_FRACTION and cf["close_loc"]<=WICK_CLOSE_OPPOSITE:self.add(t,entry,-1,"F09_WICK_REJECT","REV",cf["upper_wick_frac"],cf["range_atr"],cr,cp)
+            if (cf["lower_wick_frac"] or 0)>=WICK_FRACTION and cf["close_loc"]>=1-WICK_CLOSE_OPPOSITE:self.add(t,entry,1,"F09_WICK_REJECT","REV",cf["lower_wick_frac"],cf["range_atr"],cr,cp)
+        seven=hist[-8:-1];ranges=[b.high-b.low for b in seven];nr=seven[-1]
+        if ranges[-1]<=min(ranges[:-1]):
+            if sb.close>nr.high:self.add(t,entry,1,"F10_NR7_RELEASE","CONT",(sb.close-nr.high)/atr,ranges[-1]/atr,cr,cp)
+            elif sb.close<nr.low:self.add(t,entry,-1,"F10_NR7_RELEASE","CONT",(nr.low-sb.close)/atr,ranges[-1]/atr,cr,cp)
+        mother,inside=hist[-3],hist[-2]
+        if inside.high<=mother.high and inside.low>=mother.low:
+            if sb.close>inside.high:self.add(t,entry,1,"F11_INSIDE_RELEASE","CONT",(sb.close-inside.high)/atr,(inside.high-inside.low)/atr,cr,cp)
+            elif sb.close<inside.low:self.add(t,entry,-1,"F11_INSIDE_RELEASE","CONT",(inside.low-sb.close)/atr,(inside.high-inside.low)/atr,cr,cp)
+        if t.minute==30 and t.hour in (0,6,12,18):
+            block=hist[-6:];move=block[-1].close-block[0].open;d=sign(move)
+            if d:self.add(t,entry,-d,"F12_SESSION30","REV",abs(move)/atr,move/atr,cr,cp);self.add(t,entry,d,"F12_SESSION30","CONT",abs(move)/atr,move/atr,cr,cp)
+        if self.prev_day and sb.timestamp.date()==t.date():
+            pdh,pdl=self.prev_day["high"],self.prev_day["low"]
+            if sb.close>pdh:self.add(t,entry,1,"F13_PDAY_BREAK","CONT",(sb.close-pdh)/atr,None,cr,cp)
+            elif sb.close<pdl:self.add(t,entry,-1,"F13_PDAY_BREAK","CONT",(pdl-sb.close)/atr,None,cr,cp)
+            if sb.high>pdh and sb.close<=pdh:self.add(t,entry,-1,"F14_PDAY_FAILED","REV",(sb.high-pdh)/atr,(pdh-sb.close)/atr,cr,cp)
+            if sb.low<pdl and sb.close>=pdl:self.add(t,entry,1,"F14_PDAY_FAILED","REV",(pdl-sb.low)/atr,(sb.close-pdl)/atr,cr,cp)
+        if t.weekday()==0 and t.hour==0 and t.minute==0:
+            gap=entry-hist[-1].close;d=sign(gap)
+            if d:self.add(t
