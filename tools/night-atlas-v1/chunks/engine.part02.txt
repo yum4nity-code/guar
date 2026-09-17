@@ -1,0 +1,78 @@
+def add(self,x):
+        bisect.insort(self.sorted,x);self.queue.append(x)
+        if len(self.queue)>self.maxlen:
+            old=self.queue.popleft();i=bisect.bisect_left(self.sorted,old)
+            if i>=len(self.sorted) or self.sorted[i]!=old:raise RuntimeError("rolling sorted corruption")
+            self.sorted.pop(i)
+    def rank(self,x):
+        if not self.sorted:return None
+        return bisect.bisect_right(self.sorted,x)/len(self.sorted)
+
+def sign(x):return 1 if x>0 else -1 if x<0 else 0
+def safe_div(a,b):return None if a is None or b is None or b==0 else a/b
+def stddev(x):return statistics.pstdev(x) if len(x)>=2 else None
+def iso(x):return x.isoformat() if x is not None else None
+def nearest_distance(price,step):return price-round(price/step)*step
+def signal_id(f,v,s,t):return hashlib.sha256(f"{f}|{v}|{s}|{t.isoformat()}".encode()).hexdigest()[:24]
+def aligned_rsi(side,vals):
+    xs=list(vals)
+    if any(x is None for x in xs):return None
+    return sum(x<=30 for x in xs) if side>0 else sum(x>=70 for x in xs)
+
+def range_features(hist,n,close):
+    bars=hist[-n-1:-1]
+    hi=max(b.high for b in bars);lo=min(b.low for b in bars);w=hi-lo
+    return {"high":hi,"low":lo,"width":w,"loc":(close-lo)/w if w>0 else None,"break_up":max(close-hi,0.0),"break_down":max(lo-close,0.0)}
+
+def candle_features(bar,atr):
+    rng=bar.high-bar.low;body=abs(bar.close-bar.open);up=bar.high-max(bar.open,bar.close);lo=min(bar.open,bar.close)-bar.low
+    return {"range":rng,"body":body,"upper_wick":up,"lower_wick":lo,"body_frac":safe_div(body,rng),"upper_wick_frac":safe_div(up,rng),"lower_wick_frac":safe_div(lo,rng),"close_loc":safe_div(bar.close-bar.low,rng),"range_atr":safe_div(rng,atr)}
+
+def streak(hist):
+    d=sign(hist[-1].close-hist[-2].close)
+    if not d:return 0,0
+    c=1
+    for i in range(len(hist)-2,0,-1):
+        if sign(hist[i].close-hist[i-1].close)!=d:break
+        c+=1
+    return d,c
+
+BASE_FIELDS=["observation_schema_version","protocol_version","job_id","signal_id","family","variant","symbol","feed_type","direction","side","signal_time","entry_time","entry","year","month","quarter","weekday","utc_hour","utc_minute","session","risk","risk_definition","rsi_0","rsi_0_timeframe","rsi_m1","rsi_m5","rsi_m15","rsi_m1_available_at","rsi_m5_available_at","rsi_m15_available_at","rsi_aligned_extreme_count","atr_m1","atr_m5","atr_m15","rv12","rv48","vol_ratio_12_48","ret1_price","ret3_price","ret6_price","ret12_price","ret1_atr","ret3_atr","ret6_atr","ret12_atr","streak_dir","streak_len","signal_bar_range","signal_bar_body","signal_bar_upper_wick","signal_bar_lower_wick","signal_bar_body_frac","signal_bar_upper_wick_frac","signal_bar_lower_wick_frac","signal_bar_close_loc","signal_bar_range_atr","signal_bar_volume","range12_loc","range24_loc","range48_loc","range96_loc","range192_loc","range12_width_atr","range24_width_atr","range48_width_atr","range96_width_atr","range192_width_atr","range48_break_atr","range96_break_atr","day_open","dist_day_open_atr","prev_day_high","prev_day_low","prev_day_close","dist_prev_day_high_atr","dist_prev_day_low_atr","round1_distance","round5_distance","round10_distance","compression12_ratio","compression12_percentile","event_strength","event_aux","protected_2023_plus_opened","protected_2026_opened"]
+OUTCOME_FIELDS=["outcome_crossed_calendar_gap","outcome_max_gap_minutes"]
+for h in HORIZONS:
+    for q in ("endpoint_price","endpoint_pnl_price","endpoint_r","mfe_price","mfe_r","mae_price","mae_r","minutes_to_mfe","minutes_to_mae","mfe_before_mae"):OUTCOME_FIELDS.append(f"h{h}_{q}")
+    for c in COSTS:OUTCOME_FIELDS.append(f"h{h}_r_cost_{c:.2f}")
+for l in THRESHOLDS_R:
+    k=str(l).replace(".","p");OUTCOME_FIELDS += [f"hit_{k}_winner",f"hit_{k}_minute"]
+FIELDNAMES=BASE_FIELDS+OUTCOME_FIELDS
+
+@dataclass
+class Pending:
+    row:dict[str,Any];side:int;entry:float;risk:float;age:int=0;mfe:float=0.0;mae:float=0.0;mfe_minute:int|None=None;mae_minute:int|None=None
+    threshold_done:dict[float,bool]=field(default_factory=lambda:{x:False for x in THRESHOLDS_R})
+
+class Atlas:
+    def __init__(self,writer):
+        self.writer=writer;self.pending=[];self.signals=0;self.written=0;self.family_counts={}
+        self.m5_hist=deque(maxlen=10000);self.rsi1=WilderRSI();self.rsi5=WilderRSI();self.rsi15=WilderRSI()
+        self.atr1=WilderATR();self.atr5=WilderATR();self.atr15=WilderATR();self.agg5=Aggregator(5);self.agg15=Aggregator(15);self.comp=RollingSorted(COMPRESSION_ROLLING_BARS)
+        self.current_day=None;self.day_open=None;self.day_high=None;self.day_low=None;self.day_close=None;self.prev_day=None;self.day_extreme_triggered=set();self.prev_m1_timestamp=None
+    def roll_day(self,bar):
+        d=bar.timestamp.date()
+        if self.current_day==d:return
+        if self.current_day is not None and None not in (self.day_high,self.day_low,self.day_close):self.prev_day={"high":float(self.day_high),"low":float(self.day_low),"close":float(self.day_close)}
+        self.current_day=d;self.day_open=bar.open;self.day_high=self.day_low=self.day_close=None;self.day_extreme_triggered=set()
+    def update_day(self,bar):
+        self.day_high=bar.high if self.day_high is None else max(self.day_high,bar.high);self.day_low=bar.low if self.day_low is None else min(self.day_low,bar.low);self.day_close=bar.close
+    def session(self,h):return "00-06" if h<6 else "06-12" if h<12 else "12-18" if h<18 else "18-24"
+    def snapshot(self,t,entry,side,fam,var,strength,aux,comp_ratio,comp_pct):
+        hist=list(self.m5_hist);sb=hist[-1];atr=self.atr5.value
+        if atr is None or atr<=0:raise AdmissionError("ATR unavailable")
+        closes=[b.close for b in hist]
+        def ret(n):return closes[-1]-closes[-1-n]
+        one=[closes[i]-closes[i-1] for i in range(max(1,len(closes)-48),len(closes))]
+        rv12=stddev(one[-12:]) if len(one)>=12 else None;rv48=stddev(one[-48:]) if len(one)>=48 else None;sdir,slen=streak(hist);cf=candle_features(sb,atr)
+        rr={n:range_features(hist,n,sb.close) for n in (12,24,48,96,192)}
+        r48=max(rr[48]["break_up"],rr[48]["break_down"]);r96=max(rr[96]["break_up"],rr[96]["break_down"])
+        row={k:None for k in FIELDNAMES};row["outcome_crossed_calendar_gap"]=False;row["outcome_max_gap_minutes"]=0;risk=1.5*atr
+        row.update({"observation_schema_version":OBS_SCHEMA_VERSION,"protocol_version":PROTOCOL_VERSION,"job_id":ID,"signal_id":signal_id(fam,var,side,t),"family":fam,"variant":var,"symbol":"XAUUSD","feed_type":"BID","direction":"LONG" if side>0 else "SHORT","side":side,"signal_time":sb.available_at.isoformat(),"entry_time":t.isoformat(),"entry":entry,"year":t.year,"month":t.month,"quarter":((t.month-1)//3)+1,"weekday":t.weekday(),"utc_hour":t.hour,"utc_minute":t.minute,"session":self.session(t.hour),"risk":risk,"risk_definition":"1.5*WilderATR14_M5","rsi_0":self.rsi5.value,"rsi_0_timeframe":"M5","rsi_m1":self.rsi1.value,"rsi_m5":self.rsi5.value,"rsi_m15":self.rsi15.value,"rsi_m1_available_at":iso(self.rsi1.available_at),"rsi_m5_ava
