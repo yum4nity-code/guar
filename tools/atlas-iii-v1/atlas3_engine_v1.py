@@ -223,8 +223,7 @@ class Atlas3:
             elif occ == 1 and not st["control_done"]:
                 self.add(t, entry, d, "A3_03_LOW_OCCUPANCY_ZONE", "CONTROL_OCC1", strength=st["range_atr"], aux=1.0)
                 st["control_done"] = True
-        if cur is not None:
-            st["last_cell"] = cur
+        st["last_cell"] = cur
 
     def _hourly_amplitude_families(self, t, entry, hist, atr):
         if t.minute != 0 or len(hist) < 13:
