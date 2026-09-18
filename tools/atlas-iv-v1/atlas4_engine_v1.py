@@ -186,8 +186,8 @@ class Atlas4:
         return [bars[i].close - bars[i - 1].close for i in range(1, len(bars))]
 
     def jump_reversal(self, t, entry, hist, atr):
-        bars = hist[-27:]
-        if len(bars) != 27 or not self.contiguous(bars):
+        bars = hist[-26:]
+        if len(bars) != 26 or not self.contiguous(bars):
             return
         r0 = bars[-1].close - bars[-2].close
         if r0 == 0:
