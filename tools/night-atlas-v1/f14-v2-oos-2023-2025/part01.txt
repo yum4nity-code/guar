@@ -180,10 +180,10 @@ class Engine:
         sb = self.m5_hist[-1]
         if sb.timestamp.date() != t.date():
             return
-        if sb.available_at > t or (self.atr5.available_at is not None && self.atr5.available_at > t):
+        if sb.available_at > t or (self.atr5.available_at is not None and self.atr5.available_at > t):
             raise AdmissionError("lookahead")
         pdl = self.prev_day["low"]
-        if not (sb.low < pdl && sb.close >= pdl):
+        if not (sb.low < pdl and sb.close >= pdl):
             return
         atr = float(self.atr5.value)
         sweep = (pdl - sb.low) / atr
