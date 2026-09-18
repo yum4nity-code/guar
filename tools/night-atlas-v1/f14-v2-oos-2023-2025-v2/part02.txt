@@ -1,0 +1,174 @@
+        self.bucket.append(bar)
+        if len(self.bucket) < self.minutes:
+            return None
+        if len(self.bucket) > self.minutes:
+            raise AdmissionError("aggregator overflow")
+        out = Bar(
+            self.bucket[0].timestamp,
+            self.bucket[-1].available_at,
+            self.bucket[0].open,
+            max(x.high for x in self.bucket),
+            min(x.low for x in self.bucket),
+            self.bucket[-1].close,
+            sum((x.volume or 0.0) for x in self.bucket),
+        )
+        self.bucket = []
+        return out
+
+
+@dataclass
+class Pending:
+    signal_time: datetime
+    entry_time: datetime
+    entry: float
+    risk: float
+    sweep_atr: float
+    age: int = 0
+    crossed_gap: bool = False
+    max_gap_minutes: int = 0
+
+
+class Engine:
+    def __init__(self):
+        self.agg5 = Aggregator(5)
+        self.atr5 = WilderATR(14)
+        self.m5_hist = []
+        self.current_day = None
+        self.day_open = None
+        self.day_high = None
+        self.day_low = None
+        self.day_close = None
+        self.prev_day = None
+        self.prev_m1_timestamp = None
+        self.pending = []
+        self.completed = []
+        self.raw_signals = 0
+
+    def roll_day(self, bar: Bar):
+        d = bar.timestamp.date()
+        if self.current_day == d:
+            return
+        if self.current_day is not None and None not in (self.day_high, self.day_low, self.day_close):
+            self.prev_day = {
+                "high": float(self.day_high),
+                "low": float(self.day_low),
+                "close": float(self.day_close),
+            }
+        self.current_day = d
+        self.day_open = bar.open
+        self.day_high = None
+        self.day_low = None
+        self.day_close = None
+
+    def update_day(self, bar: Bar):
+        self.day_high = bar.high if self.day_high is None else max(self.day_high, bar.high)
+        self.day_low = bar.low if self.day_low is None else min(self.day_low, bar.low)
+        self.day_close = bar.close
+
+    def after_m5(self, bar: Bar):
+        self.m5_hist.append(bar)
+        if len(self.m5_hist) > 10000:
+            del self.m5_hist[: len(self.m5_hist) - 10000]
+        self.atr5.update(bar)
+
+    def detect(self, t: datetime, entry: float):
+        if t < OOS_START or t >= END_EXCLUSIVE - timedelta(minutes=HORIZON):
+            return
+        if not self.prev_day or not self.m5_hist or self.atr5.value is None or self.atr5.value <= 0:
+            return
+        sb = self.m5_hist[-1]
+        if sb.timestamp.date() != t.date():
+            return
+        if sb.available_at > t or (self.atr5.available_at is not None and self.atr5.available_at > t):
+            raise AdmissionError("lookahead")
+        pdl = self.prev_day["low"]
+        if not (sb.low < pdl and sb.close >= pdl):
+            return
+        atr = float(self.atr5.value)
+        sweep = (pdl - sb.low) / atr
+        risk = 1.5 * atr
+        self.raw_signals += 1
+        self.pending.append(
+            Pending(
+                signal_time=sb.available_at,
+                entry_time=t,
+                entry=float(entry),
+                risk=risk,
+                sweep_atr=sweep,
+            )
+        )
+
+    def process_pending(self, bar: Bar):
+        keep = []
+        for p in self.pending:
+            p.age += 1
+            if p.age >= HORIZON:
+                pnl = bar.close - p.entry
+                self.completed.append({
+                    "signal_time": p.signal_time.isoformat(),
+                    "entry_time": p.entry_time.isoformat(),
+                    "year": p.entry_time.year,
+                    "entry": p.entry,
+                    "risk": p.risk,
+                    "sweep_atr": p.sweep_atr,
+                    "endpoint_price": bar.close,
+                    "endpoint_pnl_price": pnl,
+                    "endpoint_r": pnl / p.risk,
+                    "outcome_crossed_calendar_gap": p.crossed_gap,
+                    "outcome_max_gap_minutes": p.max_gap_minutes,
+                })
+            else:
+                keep.append(p)
+        self.pending = keep
+
+    def on_m1(self, bar: Bar):
+        self.roll_day(bar)
+        if self.prev_m1_timestamp is not None:
+            gap_minutes = int((bar.timestamp - self.prev_m1_timestamp).total_seconds() // 60)
+            if gap_minutes > 1:
+                for p in self.pending:
+                    p.crossed_gap = True
+                    p.max_gap_minutes = max(p.max_gap_minutes, gap_minutes - 1)
+        if bar.timestamp.minute % 5 == 0:
+            self.detect(bar.timestamp, bar.open)
+        self.process_pending(bar)
+        b5 = self.agg5.push(bar)
+        if b5:
+            self.after_m5(b5)
+        self.update_day(bar)
+        self.prev_m1_timestamp = bar.timestamp
+
+
+def stat(values):
+    xs = list(values)
+    if not xs:
+        return {"n": 0, "mean_r": None, "sum_r": None, "pf": None, "win_pct": None}
+    wins = sum(x for x in xs if x > 0)
+    losses = -sum(x for x in xs if x < 0)
+    return {
+        "n": len(xs),
+        "mean_r": sum(xs) / len(xs),
+        "sum_r": sum(xs),
+        "pf": wins / losses if losses > 0 else None,
+        "win_pct": 100.0 * sum(x > 0 for x in xs) / len(xs),
+    }
+
+
+def non_overlap(rows):
+    out = []
+    next_allowed = None
+    for r in sorted(rows, key=lambda x: x["entry_time"]):
+        t = datetime.fromisoformat(r["entry_time"])
+        if next_allowed is None or t >= next_allowed:
+            out.append(r)
+            next_allowed = t + timedelta(minutes=HORIZON)
+    return out
+
+
+def freeze_spec(code_sha256: str, manifest_sha256: str, dependency_hashes: dict[str, str]):
+    return {
+        "schema": 2,
+        "id": ID,
+        "status": "FROZEN_BEFORE_OOS",
+        "frozen_before_any_market_payload_decode": True,
+        "symbol": SYMBOL,
