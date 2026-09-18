@@ -7,8 +7,8 @@ $OutputRoot = "D:\MT5_Backtests\Research\Autonomous\edge_atlas"
 $Base = "https://raw.githubusercontent.com/yum4nity-code/guar/main/tools/ensemble-i-historical-v1"
 
 $Files = @(
-    @{ Name = "ensemble_i_engine_v1.py"; Blob = "1f780087128b27732368be2aec5515d1bbf7406a" },
-    @{ Name = "ensemble_i_analyze_v1.py"; Blob = "ed576038e3e4232ce2bcf1381e49f016ab2c2216" }
+    @{ Name = "ensemble_i_engine_v1.py"; Blob = "1f780087128b27732368be2aec5515d1bbf7406a"; PreviousBlob = "7eea2d775b4e22054c6ff3acb6d9fa414066d896" },
+    @{ Name = "ensemble_i_analyze_v1.py"; Blob = "ed576038e3e4232ce2bcf1381e49f016ab2c2216"; PreviousBlob = "911e1c4f863f55d9027d76f9ba2daab39bf535c2" }
 )
 
 function Get-GitBlobSha1([string]$Path) {
@@ -64,8 +64,15 @@ try {
 
         if (Test-Path $target) {
             $existingBlob = Get-GitBlobSha1 $target
-            if ($existingBlob -ne $f.Blob) {
-                throw "Existing campaign file differs: $target"
+            if ($existingBlob -eq $f.Blob) {
+                Write-Host "$($f.Name) campaign copy already current."
+            }
+            elseif ($existingBlob -eq $f.PreviousBlob) {
+                Write-Host "$($f.Name) replacing known preflight-only predecessor blob $existingBlob"
+                Copy-Item $tmpFile $target -Force
+            }
+            else {
+                throw "Existing campaign file differs from both frozen current and known preflight predecessor: $target ($existingBlob)"
             }
         }
         else {
