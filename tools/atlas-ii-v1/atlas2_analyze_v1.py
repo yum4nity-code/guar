@@ -311,8 +311,7 @@ def main():
 
     report["signal_day_overlap"]=overlap_matrix(signal_sets)
     out=args.output_dir/"atlas2_analysis.json"
-    out.write_text(json.dumps(report,indent=2,sort_keys=True,allow_nan=False)+"
-",encoding="utf-8")
+    out.write_text(json.dumps(report,indent=2,sort_keys=True,allow_nan=False)+"\n",encoding="utf-8")
     print("=== GUARDIAN ATLAS II V1 ===")
     print(f"INPUT ROWS: {total}")
     print("2023+ ACCESSED: FALSE")
