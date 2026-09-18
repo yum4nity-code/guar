@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import math
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+UTC = timezone.utc
+ID = "F14-PDAY-FAILED-V2"
+SYMBOL = "XAUUSD"
+FEED = "BID"
+
+WARMUP_START = datetime(2022, 11, 1, tzinfo=UTC)
+OOS_START = datetime(2023, 1, 1, tzinfo=UTC)
+END_EXCLUSIVE = datetime(2026, 1, 1, tzinfo=UTC)
+
+HORIZON = 240
+MIN_RISK = 0.01
+SWEEP_MIN_ATR = 0.50
+SWEEP_MAX_ATR = 1.00
+COSTS = (0.10, 0.20)
+
+DEPENDENCY_SHA256 = {
+    "data_loader_v1.py": "9129e1d48ce5b05ef997e9fa12b6e55a674c2be052e69ed94bc3fb4c235b2f6b",
+    "preflight_v1.py": "d0e799d4a999683c4c1a46495b56a6720d40ab61058ffe2d36a1456ab69cd354",
+}
+REFERENCE_ENGINE_SHA256 = "edf95e275cdd49846fed81c06d180b5190e63c25de347137136b94e0f3674860"
+CANONICAL_LOCK_NAME = "F14_V2_OOS_2023_2025_OPENED.json"
+CANONICAL_OUTPUT_DIR = Path(r"D:\MT5_Backtests\Research\Autonomous\edge_atlas\F14-V2-OOS-2023-2025")
+
+GATE = {
+    "n_min": 100,
+    "cost_010_mean_r_gt": 0.0,
+    "cost_010_pf_min": 1.10,
+    "cost_020_mean_r_gt": 0.0,
+    "cost_020_pf_min": 1.05,
+    "positive_years_min": 2,
+    "positive_years_total": 3,
+}
+
+# Loaded only after exact local dependency hashes have been verified.
+AdmissionError = RuntimeError
+Bar = None
+decode_dukascopy_m1_day = None
+load_dukascopy_index = None
+PINNED_MANIFEST_SHA256 = None
+canonical_manifest_sha256 = None
+validate_manifest = None
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def canonical_json_bytes(obj) -> bytes:
+    return (json.dumps(obj, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+
+
+def write_json(path: Path, obj) -> None:
+    path.write_bytes(canonical_json_bytes(obj))
+
+
+def verify_and_load_dependencies(campaign_dir: Path) -> dict[str, str]:
+    actual = {}
+    for name, expected in DEPENDENCY_SHA256.items():
+        p = campaign_dir / name
+        if not p.is_file():
+            raise RuntimeError(f"missing dependency: {p}")
+        got = sha256_file(p)
+        actual[name] = got
+        if got != expected:
+            raise RuntimeError(f"dependency hash mismatch: {name}: expected {expected}, got {got}")
+
+    ref = campaign_dir / "night_atlas_v1.py"
+    if not ref.is_file():
+        raise RuntimeError(f"missing canonical V1 engine reference: {ref}")
+    ref_hash = sha256_file(ref)
+    if ref_hash != REFERENCE_ENGINE_SHA256:
+        raise RuntimeError(
+            "canonical V1 engine hash mismatch: "
+            f"expected {REFERENCE_ENGINE_SHA256}, got {ref_hash}"
+        )
+    actual["night_atlas_v1.py"] = ref_hash
+
+    if str(campaign_dir) not in sys.path:
+        sys.path.insert(0, str(campaign_dir))
+
+    import data_loader_v1 as dl
+    import preflight_v1 as pf
+
+    global AdmissionError, Bar, decode_dukascopy_m1_day, load_dukascopy_index
+    global PINNED_MANIFEST_SHA256, canonical_manifest_sha256, validate_manifest
+
+    AdmissionError = dl.AdmissionError
+    Bar = dl.Bar
+    decode_dukascopy_m1_day = dl.decode_dukascopy_m1_day
+    load_dukascopy_index = dl.load_dukascopy_index
+    PINNED_MANIFEST_SHA256 = pf.PINNED_MANIFEST_SHA256
+    canonical_manifest_sha256 = pf.canonical_manifest_sha256
+    validate_manifest = pf.validate_manifest
+    return actual
+
+
+def admitted_rows(manifest_path: Path):
+    if not manifest_path.is_file():
+        raise AdmissionError("manifest absent")
+    if "production" in {p.lower() for p in manifest_path.resolve().parts}:
+        raise AdmissionError("production input path forbidden")
+    if canonical_manifest_sha256(manifest_path) != PINNED_MANIFEST_SHA256:
+        raise AdmissionError("manifest hash mismatch")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    datasets = validate_manifest(manifest)
+    duka = datasets["DUKASCOPY_XAUUSD_BID_M1_BI5_2004_2025"]
+    if duka["asset"] != "XAUUSD" or duka["timezone"] != "UTC" or duka["granularity"] != "M1":
+        raise AdmissionError("F14 V2 requires XAUUSD UTC M1")
+    rows = load_dukascopy_index(Path(duka["payload_index"]), duka["payload_index_sha256"])
+    for row in rows:
+        day = datetime.fromisoformat(row["date"]).replace(tzinfo=UTC)
+        if WARMUP_START <= day < END_EXCLUSIVE:
+            yield row
+
+
+class WilderATR:
+    def __init__(self, period: int = 14):
+        self.period = period
+        self.previous_close = None
+        self.initial = []
+        self.value = None
+        self.available_at = None
+
+    def update(self, bar: Bar):
+        if self.previous_close is None:
+            self.previous_close = bar.close
+            self.available_at = bar.available_at
+            return
+        tr = max(
+            bar.high - bar.low,
+            abs(bar.high - self.previous_close),
+            abs(bar.low - self.previous_close),
+        )
+        if self.value is None:
+            self.initial.append(tr)
+            if len(self.initial) == self.period:
+                self.value = sum(self.initial) / self.period
+        else:
+            self.value = ((self.value * (self.period - 1)) + tr) / self.period
+        self.previous_close = bar.close
+        self.available_at = bar.available_at
+
+
+class Aggregator:
+    def __init__(self, minutes: int):
+        self.minutes = minutes
+        self.bucket = []
+
+    def push(self, bar: Bar):
+        if not self.bucket:
+            if bar.timestamp.minute % self.minutes:
+                raise AdmissionError(f"M{self.minutes} bucket misaligned")
+        elif bar.timestamp - self.bucket[-1].timestamp != timedelta(minutes=1):
+            raise AdmissionError(f"M1 gap inside M{self.minutes}")
