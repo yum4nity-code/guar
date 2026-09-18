@@ -7,8 +7,8 @@ $OutputRoot = "D:\MT5_Backtests\Research\Autonomous\edge_atlas"
 $Base = "https://raw.githubusercontent.com/yum4nity-code/guar/main/tools/atlas-ii-v1"
 
 $Files = @(
-    @{ Name = "atlas2_engine_v1.py"; Blob = "4d7eca3d4fff2552ba9290f725fa11841554f8c9" },
-    @{ Name = "atlas2_analyze_v1.py"; Blob = "21348d66b87cbe8505f6f63bfcd242575b578bbb" }
+    @{ Name = "atlas2_engine_v1.py"; Blob = "68e845eeee0cd77cf38e9cef14ed082cc74bcbdf" },
+    @{ Name = "atlas2_analyze_v1.py"; Blob = "c84ec25c2abfaf7830c6d90fd1e89b7cbcbec0c5" }
 )
 
 function Get-GitBlobSha1([string]$Path) {
