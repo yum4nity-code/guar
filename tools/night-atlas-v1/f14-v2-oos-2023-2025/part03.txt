@@ -1,0 +1,146 @@
+            day = datetime.fromisoformat(row["date"]).replace(tzinfo=UTC)
+            if OOS_START <= day < END_EXCLUSIVE:
+                oos_days_seen += 1
+            for bar in decode_dukascopy_m1_day(row):
+                if not (WARMUP_START <= bar.timestamp < END_EXCLUSIVE):
+                    raise AdmissionError("bar outside hard wall; 2026 forbidden")
+                engine.on_m1(bar)
+            if i % 100 == 0 or i == len(rows):
+                print(json.dumps({
+                    "status": "PROGRESS",
+                    "index_rows_done": i,
+                    "index_rows_total": len(rows),
+                    "raw_v2_signals": engine.raw_signals,
+                    "completed": len(engine.completed),
+                    "date": row["date"],
+                    "protected_2026_opened": False,
+                }), flush=True)
+
+        clean = [
+            r for r in engine.completed
+            if not r["outcome_crossed_calendar_gap"] and r["risk"] >= MIN_RISK
+        ]
+        base_non_overlap = non_overlap(clean)
+        selected = [
+            r for r in base_non_overlap
+            if SWEEP_MIN_ATR <= r["sweep_atr"] < SWEEP_MAX_ATR
+        ]
+
+        signal_csv = output_dir / "F14_V2_OOS_signals.csv"
+        fields = [
+            "signal_time", "entry_time", "year", "entry", "risk", "sweep_atr",
+            "endpoint_price", "endpoint_pnl_price", "endpoint_r",
+            "outcome_crossed_calendar_gap", "outcome_max_gap_minutes",
+            "r_cost_0.10", "r_cost_0.20",
+        ]
+        with signal_csv.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            for r in selected:
+                z = dict(r)
+                z["r_cost_0.10"] = z["endpoint_r"] - 0.10 / z["risk"]
+                z["r_cost_0.20"] = z["endpoint_r"] - 0.20 / z["risk"]
+                w.writerow(z)
+
+        result = {
+            "schema": 1,
+            "status": "COMPLETE",
+            "id": ID,
+            "freeze_spec_sha256": spec_hash,
+            "code_sha256": code_hash,
+            "manifest_sha256": manifest_hash,
+            "raw_signals": engine.raw_signals,
+            "completed_signals": len(engine.completed),
+            "clean_before_non_overlap": len(clean),
+            "base_non_overlap_n": len(base_non_overlap),
+            "v2_selected_n": len(selected),
+            "non_overlap_n": len(selected),
+            "oos_index_rows_seen": oos_days_seen,
+            "costs": {},
+            "yearly_cost_010": [],
+            "gate": GATE,
+            "gate_checks": {},
+            "oos_pass": False,
+            "protected_2026_opened": False,
+            "no_post_oos_tuning": True,
+        }
+
+        for cost in COSTS:
+            vals = [r["endpoint_r"] - cost / r["risk"] for r in selected]
+            result["costs"][f"{cost:.2f}"] = stat(vals)
+
+        positive_years = 0
+        for y in (2023, 2024, 2025):
+            vals = [
+                r["endpoint_r"] - 0.10 / r["risk"]
+                for r in selected if r["year"] == y
+            ]
+            s = stat(vals)
+            s["year"] = y
+            result["yearly_cost_010"].append(s)
+            if s["mean_r"] is not None and s["mean_r"] > 0:
+                positive_years += 1
+
+        s10 = result["costs"]["0.10"]
+        s20 = result["costs"]["0.20"]
+        checks = {
+            "n_min": s10["n"] >= GATE["n_min"],
+            "cost_010_mean": s10["mean_r"] is not None and s10["mean_r"] > GATE["cost_010_mean_r_gt"],
+            "cost_010_pf": s10["pf"] is not None and s10["pf"] >= GATE["cost_010_pf_min"],
+            "cost_020_mean": s20["mean_r"] is not None and s20["mean_r"] > GATE["cost_020_mean_r_gt"],
+            "cost_020_pf": s20["pf"] is not None and s20["pf"] >= GATE["cost_020_pf_min"],
+            "positive_years": positive_years >= GATE["positive_years_min"],
+        }
+        result["positive_years"] = positive_years
+        result["gate_checks"] = checks
+        result["oos_pass"] = all(checks.values())
+
+        result_path = output_dir / "F14_V2_OOS_RESULT.json"
+        result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        lock.update({
+            "status": "COMPLETE",
+            "result_sha256": sha256_file(result_path),
+            "signals_csv_sha256": sha256_file(signal_csv),
+            "oos_pass": result["oos_pass"],
+            "protected_2026_opened": False,
+        })
+        lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        print("=== F14 V2 OOS 2023-2025 ===")
+        print(f"N={s10['n']} | .10 MeanR={s10['mean_r']:.6f} PF={s10['pf']:.6f} WR={s10['win_pct']:.2f}%")
+        print(f"N={s20['n']} | .20 MeanR={s20['mean_r']:.6f} PF={s20['pf']:.6f} WR={s20['win_pct']:.2f}%")
+        for y in result["yearly_cost_010"]:
+            mean = "None" if y["mean_r"] is None else f"{y['mean_r']:.6f}"
+            pfv = "None" if y["pf"] is None else f"{y['pf']:.6f}"
+            print(f"{y['year']}: N={y['n']} MeanR={mean} PF={pfv}")
+        print(f"POSITIVE YEARS={positive_years}/3")
+        print(f"GATE={checks}")
+        print(f"OOS_PASS={result['oos_pass']}")
+        print("2026 OPENED: FALSE")
+        print(f"RESULT: {result_path}")
+        return result
+    except Exception:
+        lock["status"] = "FAILED_AFTER_OOS_OPEN"
+        lock["protected_2026_opened"] = False
+        lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        raise
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--manifest", required=True, type=Path)
+    ap.add_argument("--standards", required=True, type=Path)
+    ap.add_argument("--output-dir", required=True, type=Path)
+    ap.add_argument("--lock", required=True, type=Path)
+    ap.add_argument("--execute", action="store_true")
+    args = ap.parse_args()
+
+    if not args.execute:
+        print(json.dumps(preflight(args.manifest, args.standards), indent=2))
+        return 0
+
+    run(args.manifest, args.standards, args.output_dir, args.lock)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
