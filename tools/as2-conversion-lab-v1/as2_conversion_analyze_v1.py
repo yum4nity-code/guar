@@ -467,7 +467,7 @@ def main():
 
         boot = bootstrap_signal(signal, vf10, SEED + i * 1000)
         conc = concentration(sig10_values)
-        d = daily_delta(signal, control, vf10, SEED + i * 1000 + 1)
+        d = preliminary[cand["id"]][1]
         matched = matched_delta(signal, control, vf10)
 
         yearly = []
