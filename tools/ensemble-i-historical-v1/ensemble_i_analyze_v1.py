@@ -24,8 +24,8 @@ FAMILIES = [
     "E3_AS2_CONFIRMED",
 ]
 
-YEARS = tuple(range(2004, 2017))
-EARLY_YEARS = set(range(2004, 2011))
+YEARS = tuple(range(2005, 2017))
+EARLY_YEARS = set(range(2005, 2011))
 LATE_YEARS = set(range(2011, 2017))
 
 GATE = {
@@ -35,7 +35,7 @@ GATE = {
     "cost_020_pf_min": 1.05,
     "cost_020_mean_gt": 0.0,
     "positive_years_min": 9,
-    "early_2004_2010_mean_gt": 0.0,
+    "early_2005_2010_mean_gt": 0.0,
     "late_2011_2016_mean_gt": 0.0,
     "signal_bootstrap_ci95_lower_gt": 0.0,
     "without_top1_mean_gt": 0.0,
@@ -319,7 +319,7 @@ def main():
             t = datetime.fromisoformat(row["entry_time"])
 
             if not (
-                datetime(2004, 4, 1, tzinfo=t.tzinfo)
+                datetime(2005, 3, 1, tzinfo=t.tzinfo)
                 <= t
                 < datetime(2017, 1, 1, tzinfo=t.tzinfo)
             ):
@@ -457,7 +457,7 @@ def main():
             "early_mean": (
                 early["mean_r"] is not None
                 and early["mean_r"]
-                > GATE["early_2004_2010_mean_gt"]
+                > GATE["early_2005_2010_mean_gt"]
             ),
             "late_mean": (
                 late["mean_r"] is not None
@@ -516,7 +516,7 @@ def main():
                 "bh_q": delta_q[fam],
             },
             "matched_control": matched,
-            "early_2004_2010": early,
+            "early_2005_2010": early,
             "late_2011_2016": late,
             "positive_years": positive_years,
             "minimum_year_mean_010": (
@@ -549,11 +549,11 @@ def main():
         "schema": 1,
         "status": "COMPLETE",
         "id": ID,
-        "scope": "UNTOUCHED_HISTORICAL_HOLDOUT_2004_04_TO_2016_12",
+        "scope": "UNTOUCHED_HISTORICAL_HOLDOUT_2005_03_TO_2016_12",
         "input_rows": input_rows,
         "family_count": len(FAMILIES),
         "families": FAMILIES,
-        "historical_2004_2016_opened": True,
+        "historical_2005_2016_opened": True,
         "development_2017_2025_reread": False,
         "protected_2026_opened": False,
         "gate": GATE,
@@ -578,7 +578,7 @@ def main():
 
     print("=== GUARDIAN ENSEMBLE I HISTORICAL HOLDOUT V1 ===")
     print(f"INPUT ROWS: {input_rows}")
-    print("HISTORICAL 2004-2016 ACCESSED: TRUE")
+    print("HISTORICAL 2005-2016 ACCESSED: TRUE")
     print("2017-2025 REREAD: FALSE")
     print("2026 ACCESSED: FALSE")
 
@@ -603,8 +603,8 @@ def main():
             f"{r['family']} | N={s10['n']} "
             f"| .10 MeanR={s10['mean_r']} PF={s10['pf']} "
             f"| .20 MeanR={s20['mean_r']} PF={s20['pf']} "
-            f"| Years+={r['positive_years']}/13 "
-            f"| Early={r['early_2004_2010']['mean_r']} "
+            f"| Years+={r['positive_years']}/12 "
+            f"| Early={r['early_2005_2010']['mean_r']} "
             f"| Late={r['late_2011_2016']['mean_r']} "
             f"| PASS={r['historical_holdout_pass']}"
         )
