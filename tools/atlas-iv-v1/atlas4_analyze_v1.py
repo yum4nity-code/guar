@@ -181,6 +181,11 @@ def main():
             for y in range(2017,2023):
                 ld=delta([r for r in sig if r["year"]!=y],[r for r in ctl if r["year"]!=y],vf,SEED+i*2000+y)
                 loo_ok &= (ld["mean_daily_delta"] is not None and ld["mean_daily_delta"]>0); loo.append({"excluded_year":y,"delta":ld})
+            secondary=[]
+            for hh in x["secondary"]:
+                ss2=nonoverlap(raw[fam]["SIGNAL"],hh); cc2=nonoverlap(raw[fam][x["control"]],hh)
+                vf2=lambda r,hhh=hh: ampvalue(r,hhh)
+                secondary.append({"horizon":hh,"signal":ampstats([vf2(r) for r in ss2]),"control":ampstats([vf2(r) for r in cc2]),"control_delta":delta(ss2,cc2,vf2,SEED+i*4000+hh)})
             checks={
               "full_n":ss["n"]>=500,
               "holdout_n":len(hos)>=150,
@@ -192,7 +197,7 @@ def main():
               "matched_delta":mat["weighted_mean_delta"] is not None and mat["weighted_mean_delta"]>0,
               "bh_q":qmap[fam] is not None and qmap[fam]<=.10,
             }
-            item={"family":fam,"kind":kind,"primary_horizon":h,"signal_primary":ss,"control_primary":cs,"relative_uplift_pct":uplift,"signal_vs_control":d,"coarsened_matched_control":mat,"internal_holdout_2021_2022":{"signal":ampstats([vf(r) for r in hos]),"control_delta":hod},"leave_one_year_out":loo,"phenomenon_checks":checks,"phenomenon_candidate":all(checks.values()),"tradable_candidate":False}
+            item={"family":fam,"kind":kind,"primary_horizon":h,"signal_primary":ss,"control_primary":cs,"relative_uplift_pct":uplift,"signal_vs_control":d,"coarsened_matched_control":mat,"internal_holdout_2021_2022":{"signal":ampstats([vf(r) for r in hos]),"control_delta":hod},"leave_one_year_out":loo,"secondary_horizons_descriptive_only":secondary,"phenomenon_checks":checks,"phenomenon_candidate":all(checks.values()),"tradable_candidate":False}
         else:
             vf=lambda r,hh=h:rvalue(r,hh,.10)
             s10=stats([rvalue(r,h,.10) for r in sig]); s20=stats([rvalue(r,h,.20) for r in sig]); d=pre[fam]; d["bh_q"]=qmap[fam]
@@ -204,6 +209,11 @@ def main():
                 sy=subset(sig,{y}); ys=stats([rvalue(r,h,.10) for r in sy]); pos+=1 if ys["mean_r"] is not None and ys["mean_r"]>0 else 0; yearly.append({"year":y,"signal":ys})
                 sx=[r for r in sig if r["year"]!=y]; cx=[r for r in ctl if r["year"]!=y]; ls=stats([rvalue(r,h,.10) for r in sx]); ld=delta(sx,cx,vf,SEED+i*3000+y)
                 loo_sig &= (ls["mean_r"] is not None and ls["mean_r"]>0); loo_delta &= (ld["mean_daily_delta"] is not None and ld["mean_daily_delta"]>0); loo.append({"excluded_year":y,"signal":ls,"control_delta":ld})
+            secondary=[]
+            for hh in x["secondary"]:
+                ss2=nonoverlap(raw[fam]["SIGNAL"],hh); cc2=nonoverlap(raw[fam][x["control"]],hh)
+                vf2=lambda r,hhh=hh:rvalue(r,hhh,.10)
+                secondary.append({"horizon":hh,"signal_010":stats([rvalue(r,hh,.10) for r in ss2]),"control_010":stats([rvalue(r,hh,.10) for r in cc2]),"control_delta":delta(ss2,cc2,vf2,SEED+i*5000+hh)})
             cheap={"full_n":s10["n"]>=100,"full_mean":s10["mean_r"] is not None and s10["mean_r"]>0,"control_delta":d["mean_daily_delta"] is not None and d["mean_daily_delta"]>0,"development_mean":devs["mean_r"] is not None and devs["mean_r"]>0,"holdout_mean":ho10["mean_r"] is not None and ho10["mean_r"]>0}
             strict={
               "full_n":s10["n"]>=200,"holdout_n":ho10["n"]>=60,
@@ -216,7 +226,7 @@ def main():
               "control_delta":d["mean_daily_delta"] is not None and d["mean_daily_delta"]>0,"control_bootstrap":d["ci95"][0] is not None and d["ci95"][0]>0,
               "holdout_control_delta":hod["mean_daily_delta"] is not None and hod["mean_daily_delta"]>0,"loo_control_delta":loo_delta,"bh_q":qmap[fam] is not None and qmap[fam]<=.10,
             }
-            item={"family":fam,"kind":kind,"primary_horizon":h,"signal_cost_010":{**s10,**conc,"bootstrap_daily":boot},"signal_cost_020":s20,"signal_vs_control":d,"coarsened_matched_control":mat,"development_2017_2020":{"signal_010":devs},"internal_holdout_2021_2022":{"signal_010":ho10,"signal_020":ho20,"control_delta":hod},"positive_years":pos,"yearly":yearly,"leave_one_year_out":loo,"cheap_fail_checks":cheap,"cheap_fail_pass":all(cheap.values()),"strict_freeze_checks":strict,"strict_freeze_candidate":all(strict.values())}
+            item={"family":fam,"kind":kind,"primary_horizon":h,"signal_cost_010":{**s10,**conc,"bootstrap_daily":boot},"signal_cost_020":s20,"signal_vs_control":d,"coarsened_matched_control":mat,"development_2017_2020":{"signal_010":devs},"internal_holdout_2021_2022":{"signal_010":ho10,"signal_020":ho20,"control_delta":hod},"positive_years":pos,"yearly":yearly,"leave_one_year_out":loo,"secondary_horizons_descriptive_only":secondary,"cheap_fail_checks":cheap,"cheap_fail_pass":all(cheap.values()),"strict_freeze_checks":strict,"strict_freeze_candidate":all(strict.values())}
         report["families"].append(item)
 
     out=args.output_dir/"atlas4_analysis.json"; out.write_text(json.dumps(report,indent=2,sort_keys=True,allow_nan=False)+"\n",encoding="utf-8")
