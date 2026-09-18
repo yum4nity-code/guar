@@ -271,8 +271,7 @@ def main():
         raise na.AdmissionError(f"refusing overwrite: {args.output_dir}")
     args.output_dir.mkdir(parents=True)
     spec = {"schema": 1, "id": ID, "status": "PREREGISTERED_BEFORE_MARKET_PASS", "discovery_start": na.DISCOVERY_START.isoformat(), "development_end_exclusive": "2021-01-01T00:00:00+00:00", "internal_holdout_start": "2021-01-01T00:00:00+00:00", "discovery_end_exclusive": na.END_EXCLUSIVE.isoformat(), "families": FAMILIES, "gates": GATES, "standard_horizons": list(na.HORIZONS), "costs": list(na.COSTS), "risk_definition": "1.5*WilderATR14_M5", "min_risk_analysis": 0.01, "gap_outcomes_excluded_analysis": True, "non_overlap": "wall-clock primary horizon per family+variant after gap/risk filters", "multiple_testing": "Benjamini-Hochberg across six primary signal-vs-control tests", "protected_2023_plus_opened": False, "protected_2026_opened": False, "engine_sha256": sha256_file(Path(__file__).resolve()), "dependency_sha256": hashes}
-    (args.output_dir / "preregistered_spec.json").write_text(json.dumps(spec, indent=2, sort_keys=True, allow_nan=False) + "
-", encoding="utf-8")
+    (args.output_dir / "preregistered_spec.json").write_text(json.dumps(spec, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     csvp = args.output_dir / "signals.csv"
     rows = list(na.admitted_rows(args.manifest))
     with csvp.open("w", newline="", encoding="utf-8") as f:
@@ -289,8 +288,7 @@ def main():
         discarded = len(atlas.base.pending)
         atlas.base.pending = []
     summary = {"schema": 1, "status": "COMPLETE", "id": ID, "signals_created": atlas.base.signals, "signals_written": atlas.base.written, "discarded_unfinished_at_end": discarded, "family_counts": atlas.base.family_counts, "signals_csv_sha256": sha256_file(csvp), "engine_sha256": sha256_file(Path(__file__).resolve()), "dependency_sha256": hashes, "market_passes": 1, "protected_2023_plus_opened": False, "protected_2026_opened": False}
-    (args.output_dir / "engine_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "
-", encoding="utf-8")
+    (args.output_dir / "engine_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     print(json.dumps(summary, allow_nan=False))
 
 if __name__ == "__main__":
