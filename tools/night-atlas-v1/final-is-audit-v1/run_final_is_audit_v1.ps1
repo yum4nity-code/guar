@@ -43,7 +43,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "PYTHON SYNTAX CHECK FAILED" }
 
     ""
-    "SCRIPT VERIFIED — RUNNING FINAL IS AUDIT"
+    "SCRIPT VERIFIED - RUNNING FINAL IS AUDIT"
     ""
     python $Script --input $InputCsv --output-dir $OutDir
     if ($LASTEXITCODE -ne 0) { throw "FINAL IS AUDIT FAILED" }
