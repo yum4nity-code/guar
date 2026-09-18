@@ -107,13 +107,18 @@
         })
         lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+        def fmt(v, digits=6):
+            if v is None:
+                return "None"
+            if isinstance(v, float) and math.isinf(v):
+                return "inf"
+            return f"{v:.{digits}f}"
+
         print("=== F14 V2 OOS 2023-2025 ===")
-        print(f"N={s10['n']} | .10 MeanR={s10['mean_r']:.6f} PF={s10['pf']:.6f} WR={s10['win_pct']:.2f}%")
-        print(f"N={s20['n']} | .20 MeanR={s20['mean_r']:.6f} PF={s20['pf']:.6f} WR={s20['win_pct']:.2f}%")
+        print(f"N={s10['n']} | .10 MeanR={fmt(s10['mean_r'])} PF={fmt(s10['pf'])} WR={fmt(s10['win_pct'],2)}%")
+        print(f"N={s20['n']} | .20 MeanR={fmt(s20['mean_r'])} PF={fmt(s20['pf'])} WR={fmt(s20['win_pct'],2)}%")
         for y in result["yearly_cost_010"]:
-            mean = "None" if y["mean_r"] is None else f"{y['mean_r']:.6f}"
-            pfv = "None" if y["pf"] is None else f"{y['pf']:.6f}"
-            print(f"{y['year']}: N={y['n']} MeanR={mean} PF={pfv}")
+            print(f"{y['year']}: N={y['n']} MeanR={fmt(y['mean_r'])} PF={fmt(y['pf'])}")
         print(f"POSITIVE YEARS={positive_years}/3")
         print(f"GATE={checks}")
         print(f"OOS_PASS={result['oos_pass']}")
