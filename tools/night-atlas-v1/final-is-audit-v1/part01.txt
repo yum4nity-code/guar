@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import argparse,csv,json,math,random,statistics
+from collections import defaultdict
+from datetime import datetime,timedelta
+from pathlib import Path
+SEED=20260918; BOOTSTRAPS=2000; COSTS=(0.10,0.20); MIN_RISK=0.01
+CANDIDATES=(("F13_PDAY_BREAK","CONT","LONG",240),("F14_PDAY_FAILED","REV","LONG",240),("F16_DAYOPEN_EXTREME","REV","LONG",120))
+def fnum(x):
+    try:
+        v=float(x); return v if math.isfinite(v) else None
+    except Exception:return None
+def truthy(x):return str(x).strip().lower() in {"true","1","yes"}
+def percentile(values,q):
+    if not values:return None
+    xs=sorted(values)
+    if len(xs)==1:return xs[0]
+    pos=(len(xs)-1)*q; lo=int(math.floor(pos)); hi=int(math.ceil(pos))
+    if lo==hi:return xs[lo]
+    w=pos-lo; return xs[lo]*(1-w)+xs[hi]*w
+def stats(values):
+    xs=[x for x in values if x is not None and math.isfinite(x)]
+    if not xs:return {"n":0,"mean_r":None,"sum_r":None,"pf":None,"win_pct":None,"median_r":None,"p05_r":None,"p95_r":None,"max_drawdown_r":None,"best_r":None,"worst_r":None}
+    gw=sum(x for x in xs if x>0); gl=-sum(x for x in xs if x<0); cum=peak=maxdd=0.0
+    for x in xs:
+        cum+=x; peak=max(peak,cum); maxdd=max(maxdd,peak-cum)
+    return {"n":len(xs),"mean_r":sum(xs)/len(xs),"sum_r":sum(xs),"pf":gw/gl if gl>0 else None,"win_pct":100*sum(x>0 for x in xs)/len(xs),"median_r":statistics.median(xs),"p05_r":percentile(xs,.05),"p95_r":percentile(xs,.95),"max_drawdown_r":maxdd,"best_r":max(xs),"worst_r":min(xs)}
+def concentration(values):
+    xs=[x for x in values if x is not None and math.isfinite(x)]; wins=sorted((x for x in xs if x>0),reverse=True); gross=sum(wins)
+    if not wins or gross<=0:return {"positive_trade_count":0,"top_1pct_of_all_trades_gross_win_share_pct":None,"top_5_winners_gross_win_share_pct":None,"mean_r_without_top_1pct_winners":None}
+    topn=max(1,math.ceil(.01*len(xs))); top1=sum(wins[:topn]); top5=sum(wins[:5]); idx=sorted(range(len(xs)),key=lambda i:xs[i],reverse=True)[:topn]; remset=set(idx); rem=[x for i,x in enumerate(xs) if i not in remset]
+    return {"positive_trade_count":len(wins),"top_1pct_of_all_trades_gross_win_share_pct":100*top1/gross,"top_5_winners_gross_win_share_pct":100*top5/gross,"mean_r_without_top_1pct_winners":sum(rem)/len(rem) if rem else None}
+def daily_block_bootstrap(records,seed):
+    day=defaultdict(lambda:[0,0.0])
+    for d,x in records:day[d][0]+=1;day[d][1]+=x
+    blocks=list(day.values())
+    if not blocks:return {"days":0,"replicates":0,"mean_r_ci95":[None,None],"median_bootstrap_mean_r":None}
+    rng=random.Random(seed); k=len(blocks); means=[]
+    for _ in range(BOOTSTRAPS):
+        n=0;s=0.0
+        for count,total in rng.choices(blocks,k=k):n+=count;s+=total
+        means.append(s/n if n else 0.0)
+    return {"days":k,"replicates":BOOTSTRAPS,"mean_r_ci95":[percentile(means,.025),percentile(means,.975)],"median_bootstrap_mean_r":percentile(means,.5)}
+def non_overlap(records,horizon):
+    out=[]; next_allowed=None
+    for r in records:
+        t=r["entry_time"]
