@@ -16,8 +16,8 @@ from pathlib import Path
 UTC = timezone.utc
 ID = "GUARDIAN-ENSEMBLE-I-HISTORICAL-HOLDOUT-V1"
 
-WARMUP_START = datetime(2004, 1, 1, tzinfo=UTC)
-HOLDOUT_START = datetime(2004, 4, 1, tzinfo=UTC)
+WARMUP_START = datetime(2004, 11, 8, tzinfo=UTC)
+HOLDOUT_START = datetime(2005, 3, 1, tzinfo=UTC)
 HOLDOUT_END_EXCLUSIVE = datetime(2017, 1, 1, tzinfo=UTC)
 
 EXPECTED = {
@@ -58,7 +58,7 @@ GATE = {
     "cost_020_pf_min": 1.05,
     "cost_020_mean_gt": 0.0,
     "positive_years_min": 9,
-    "early_2004_2010_mean_gt": 0.0,
+    "early_2005_2010_mean_gt": 0.0,
     "late_2011_2016_mean_gt": 0.0,
     "signal_bootstrap_ci95_lower_gt": 0.0,
     "without_top1_mean_gt": 0.0,
@@ -130,9 +130,9 @@ def admitted_rows(dl, pf, manifest_path: Path):
         raise dl.AdmissionError("no historical rows admitted")
 
     first_day = datetime.fromisoformat(selected[0]["date"]).replace(tzinfo=UTC)
-    if first_day >= datetime(2004, 2, 1, tzinfo=UTC):
+    if first_day != WARMUP_START:
         raise dl.AdmissionError(
-            f"historical payload lacks January 2004 warmup: {first_day.isoformat()}"
+            f"historical payload start mismatch: expected {WARMUP_START.isoformat()}, got {first_day.isoformat()}"
         )
 
     return selected
@@ -519,7 +519,7 @@ def main():
         "ensembles": ENSEMBLES,
         "gate": GATE,
         "market_passes_planned": 1,
-        "historical_2004_2016_opened_by_this_run": True,
+        "historical_2005_2016_opened_by_this_run": True,
         "development_2017_2025_reread": False,
         "protected_2026_opened": False,
         "dependency_sha256": hashes,
@@ -576,7 +576,7 @@ def main():
             "BH across the three historical-holdout primary ensemble tests"
         ),
         "gate": GATE,
-        "historical_2004_2016_opened_by_this_run": True,
+        "historical_2005_2016_opened_by_this_run": True,
         "development_2017_2025_reread": False,
         "protected_2026_opened": False,
         "engine_sha256": sha256_file(Path(__file__).resolve()),
@@ -616,7 +616,7 @@ def main():
                     "signals": lab.base.signals,
                     "pending": len(lab.base.pending),
                     "date": row["date"],
-                    "historical_2004_2016_opened": True,
+                    "historical_2005_2016_opened": True,
                     "development_2017_2025_reread": False,
                     "protected_2026_opened": False,
                 }, allow_nan=False), flush=True)
@@ -639,7 +639,7 @@ def main():
         "market_passes": 1,
         "holdout_start": HOLDOUT_START.isoformat(),
         "holdout_end_exclusive": HOLDOUT_END_EXCLUSIVE.isoformat(),
-        "historical_2004_2016_opened": True,
+        "historical_2005_2016_opened": True,
         "development_2017_2025_reread": False,
         "protected_2026_opened": False,
     }
