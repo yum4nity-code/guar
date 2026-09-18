@@ -21,8 +21,10 @@ EXPECTED = {
     "data_loader_v1.py": "9129e1d48ce5b05ef997e9fa12b6e55a674c2be052e69ed94bc3fb4c235b2f6b",
     "preflight_v1.py": "d0e799d4a999683c4c1a46495b56a6720d40ab61058ffe2d36a1456ab69cd354",
     "night_atlas_v1.py": "edf95e275cdd49846fed81c06d180b5190e63c25de347137136b94e0f3674860",
-    "ensemble_i_engine_v1.py": "1f780087128b27732368be2aec5515d1bbf7406a",
+    "ensemble_i_engine_v1.py": "defe36eb894789697d71951552b0d5df26b90e6bdee7064db4fab6bac28e9ed5",
 }
+
+ENSEMBLE_ENGINE_GIT_BLOB = "1f780087128b27732368be2aec5515d1bbf7406a"
 
 
 def sha256_file(path: Path) -> str:
@@ -116,7 +118,7 @@ def main():
         "development_start": DEV_START.isoformat(),
         "development_end_exclusive": DEV_END_EXCLUSIVE.isoformat(),
         "days_including_warmup": len(rows),
-        "source_vote_engine_blob": EXPECTED["ensemble_i_engine_v1.py"],
+        "source_vote_engine_blob": ENSEMBLE_ENGINE_GIT_BLOB,
         "family_emitted": "E2_DIVERSE_SCORE_5 only",
         "market_passes_planned": 1,
         "historical_2005_2016_reread": False,
@@ -137,7 +139,7 @@ def main():
         "schema": 1,
         "id": ID,
         "status": "PREREGISTERED_BEFORE_2017_2025_EXTENSION_PASS",
-        "source_vote_engine_blob": EXPECTED["ensemble_i_engine_v1.py"],
+        "source_vote_engine_blob": ENSEMBLE_ENGINE_GIT_BLOB,
         "warmup_start": WARMUP_START.isoformat(),
         "development_start": DEV_START.isoformat(),
         "development_end_exclusive": DEV_END_EXCLUSIVE.isoformat(),
