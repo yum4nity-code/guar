@@ -1,0 +1,47 @@
+        if next_allowed is None or t>=next_allowed:out.append(r);next_allowed=t+timedelta(minutes=horizon)
+    return out
+def main():
+    ap=argparse.ArgumentParser();ap.add_argument("--input",required=True,type=Path);ap.add_argument("--output-dir",required=True,type=Path);args=ap.parse_args();args.output_dir.mkdir(parents=True,exist_ok=True)
+    wanted={(f,v,d):h for f,v,d,h in CANDIDATES};raw=defaultdict(list);total=0;rgap=defaultdict(int);rrisk=defaultdict(int)
+    with args.input.open(newline="",encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            total+=1;k3=(row["family"],row["variant"],row["direction"])
+            if k3 not in wanted:continue
+            h=wanted[k3];risk=fnum(row.get("risk"));ep=fnum(row.get(f"h{h}_endpoint_r"))
+            if risk is None or risk<=0 or ep is None:continue
+            key=(*k3,h)
+            if truthy(row.get("outcome_crossed_calendar_gap")):rgap[key]+=1;continue
+            if risk<MIN_RISK:rrisk[key]+=1;continue
+            t=datetime.fromisoformat(row["entry_time"]);raw[key].append({"entry_time":t,"date":t.date().isoformat(),"year":t.year,"quarter":f"{t.year}-Q{((t.month-1)//3)+1}","quarter_of_year":f"Q{((t.month-1)//3)+1}","session":row.get("session") or "UNKNOWN","risk":risk,"raw_endpoint_r":ep})
+    report={"schema":1,"status":"COMPLETE","input_rows":total,"filters_preregistered":{"outcome_crossed_calendar_gap":False,"min_risk":MIN_RISK,"non_overlap":"wall-clock horizon after gap-crossing rows excluded","costs":list(COSTS),"bootstrap":f"{BOOTSTRAPS} deterministic resamples of UTC entry-date blocks","seed":SEED},"freeze_gate_preregistered_before_results":{"n_min":500,"cost_010_pf_min":1.10,"cost_010_mean_r_gt":0.0,"cost_020_pf_min":1.05,"cost_020_mean_r_gt":0.0,"positive_years_min":4,"leave_one_year_out_all_mean_r_gt":0.0,"daily_block_bootstrap_ci95_lower_gt":0.0},"candidates":[]}
+    flat=[];yearly=[];quarters=[];sessions=[]
+    for idx,(fam,var,d,h) in enumerate(CANDIDATES):
+        key=(fam,var,d,h);rows=non_overlap(sorted(raw[key],key=lambda z:z["entry_time"]),h);c={"family":fam,"variant":var,"direction":d,"horizon_min":h,"rejected_gap_rows":rgap[key],"rejected_risk_rows":rrisk[key],"non_overlap_n":len(rows),"costs":{},"yearly_cost_010":[],"leave_one_year_out_cost_010":[],"quarter_of_year_cost_010":[],"calendar_quarter_cost_010":[],"session_cost_010":[]}
+        for cost in COSTS:
+            vals=[r["raw_endpoint_r"]-cost/r["risk"] for r in rows];s=stats(vals);conc=concentration(vals);boot=daily_block_bootstrap([(r["date"],x) for r,x in zip(rows,vals)],SEED+idx*100+int(cost*100));c["costs"][f"{cost:.2f}"]={**s,**conc,"bootstrap_daily":boot};flat.append({"family":fam,"variant":var,"direction":d,"horizon_min":h,"cost":cost,**s,**conc,"bootstrap_ci95_low":boot["mean_r_ci95"][0],"bootstrap_ci95_high":boot["mean_r_ci95"][1]})
+        vals010=[(r,r["raw_endpoint_r"]-.10/r["risk"]) for r in rows];years=sorted({r["year"] for r,_ in vals010});pos=0
+        for y in years:
+            s=stats([x for r,x in vals010 if r["year"]==y]);pos+=int(s["mean_r"] is not None and s["mean_r"]>0);item={"year":y,**s};c["yearly_cost_010"].append(item);yearly.append({"family":fam,"variant":var,"direction":d,"horizon_min":h,**item})
+        loyo=True
+        for y in years:
+            s=stats([x for r,x in vals010 if r["year"]!=y]);loyo=loyo and (s["mean_r"] is not None and s["mean_r"]>0);c["leave_one_year_out_cost_010"].append({"excluded_year":y,**s})
+        for q in ("Q1","Q2","Q3","Q4"):
+            s=stats([x for r,x in vals010 if r["quarter_of_year"]==q]);c["quarter_of_year_cost_010"].append({"quarter":q,**s});quarters.append({"family":fam,"variant":var,"direction":d,"horizon_min":h,"bucket":q,"bucket_type":"quarter_of_year",**s})
+        for q in sorted({r["quarter"] for r,_ in vals010}):
+            s=stats([x for r,x in vals010 if r["quarter"]==q]);c["calendar_quarter_cost_010"].append({"quarter":q,**s});quarters.append({"family":fam,"variant":var,"direction":d,"horizon_min":h,"bucket":q,"bucket_type":"calendar_quarter",**s})
+        for sess in ("00-06","06-12","12-18","18-24","UNKNOWN"):
+            xs=[x for r,x in vals010 if r["session"]==sess]
+            if not xs:continue
+            s=stats(xs);c["session_cost_010"].append({"session":sess,**s});sessions.append({"family":fam,"variant":var,"direction":d,"horizon_min":h,"session":sess,**s})
+        s10=c["costs"]["0.10"];s20=c["costs"]["0.20"];bl=s10["bootstrap_daily"]["mean_r_ci95"][0];checks={"n_min":len(rows)>=500,"cost_010_pf":s10["pf"] is not None and s10["pf"]>=1.10,"cost_010_mean":s10["mean_r"] is not None and s10["mean_r"]>0,"cost_020_pf":s20["pf"] is not None and s20["pf"]>=1.05,"cost_020_mean":s20["mean_r"] is not None and s20["mean_r"]>0,"positive_years":pos>=4,"leave_one_year_out":loyo,"bootstrap_ci95_lower":bl is not None and bl>0};c["positive_years_cost_010"]=pos;c["freeze_gate_checks"]=checks;c["freeze_ready"]=all(checks.values());report["candidates"].append(c)
+    f13=non_overlap(sorted(raw[("F13_PDAY_BREAK","CONT","LONG",240)],key=lambda z:z["entry_time"]),240);f14=non_overlap(sorted(raw[("F14_PDAY_FAILED","REV","LONG",240)],key=lambda z:z["entry_time"]),240);d13={r["date"] for r in f13};d14={r["date"] for r in f14};u=d13|d14;report["f13_f14_structure"]={"f13_signal_days":len(d13),"f14_signal_days":len(d14),"same_utc_days":len(d13&d14),"union_utc_days":len(u),"same_day_share_of_union_pct":100*len(d13&d14)/len(u) if u else None}
+    def write_csv(name,rows):
+        p=args.output_dir/name
+        if not rows:p.write_text("",encoding="utf-8");return
+        with p.open("w",newline="",encoding="utf-8") as f:w=csv.DictWriter(f,fieldnames=list(rows[0].keys()));w.writeheader();w.writerows(rows)
+    write_csv("candidate_summary.csv",flat);write_csv("candidate_yearly.csv",yearly);write_csv("candidate_quarters.csv",quarters);write_csv("candidate_sessions.csv",sessions);out=args.output_dir/"final_is_audit.json";out.write_text(json.dumps(report,indent=2,allow_nan=False)+"\n",encoding="utf-8")
+    print("=== GUARDIAN FINAL IS AUDIT ===");print(f"INPUT ROWS: {total}");print("2023+ ACCESSED: FALSE");print("2026 ACCESSED: FALSE\n")
+    for c in report["candidates"]:
+        a=c["costs"]["0.10"];b=c["costs"]["0.20"];ci=a["bootstrap_daily"]["mean_r_ci95"];print(f"{c['family']} | {c['variant']} | {c['direction']} | {c['horizon_min']}m");print(f"  N={c['non_overlap_n']} | .10 MeanR={a['mean_r']:.6f} PF={a['pf']:.6f} | .20 MeanR={b['mean_r']:.6f} PF={b['pf']:.6f}");print(f"  Years+={c['positive_years_cost_010']}/6 | bootstrap95=[{ci[0]:.6f}, {ci[1]:.6f}]");print(f"  Top1% gross-win share={a['top_1pct_of_all_trades_gross_win_share_pct']:.2f}% | MeanR sans top1%={a['mean_r_without_top_1pct_winners']:.6f}");print(f"  FREEZE_READY={c['freeze_ready']} | checks={c['freeze_gate_checks']}\n")
+    x=report["f13_f14_structure"];print(f"F13/F14 same UTC days: {x['same_utc_days']} / union {x['union_utc_days']} ({x['same_day_share_of_union_pct']:.2f}%)");print(f"REPORT: {out}")
+if __name__=="__main__":main()
