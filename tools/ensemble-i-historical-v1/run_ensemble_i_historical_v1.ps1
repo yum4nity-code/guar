@@ -7,8 +7,8 @@ $OutputRoot = "D:\MT5_Backtests\Research\Autonomous\edge_atlas"
 $Base = "https://raw.githubusercontent.com/yum4nity-code/guar/main/tools/ensemble-i-historical-v1"
 
 $Files = @(
-    @{ Name = "ensemble_i_engine_v1.py"; Blob = "7eea2d775b4e22054c6ff3acb6d9fa414066d896" },
-    @{ Name = "ensemble_i_analyze_v1.py"; Blob = "911e1c4f863f55d9027d76f9ba2daab39bf535c2" }
+    @{ Name = "ensemble_i_engine_v1.py"; Blob = "1f780087128b27732368be2aec5515d1bbf7406a" },
+    @{ Name = "ensemble_i_analyze_v1.py"; Blob = "ed576038e3e4232ce2bcf1381e49f016ab2c2216" }
 )
 
 function Get-GitBlobSha1([string]$Path) {
@@ -89,15 +89,15 @@ try {
 
     Write-Host ""
     Write-Host "===== ENSEMBLE I HISTORICAL HOLDOUT PREFLIGHT ====="
-    Write-Host "WARMUP ONLY: 2004-01 through 2004-03."
-    Write-Host "HISTORICAL HOLDOUT: 2004-04-01 through 2016-12-31."
+    Write-Host "WARMUP ONLY: 2004-11-08 through 2005-02-28."
+    Write-Host "HISTORICAL HOLDOUT: 2005-03-01 through 2016-12-31."
     Write-Host "2017-2025: NOT REREAD."
     Write-Host "2026: CLOSED."
     Write-Host "Three frozen equal-weight ensemble rules."
     Write-Host "Execution: uncapped TIME_H60 only."
     Write-Host "One market pass."
     Write-Host ""
-    Write-Host "IMPORTANT: executing the pass opens the previously unused 2004-2016 historical block for these ensemble families."
+    Write-Host "IMPORTANT: executing the pass opens the previously unused 2005-2016 historical block for these ensemble families."
 
     & python $Engine --manifest $Manifest --standards $Standards --output-dir $Run
     if ($LASTEXITCODE -ne 0) {
@@ -106,7 +106,7 @@ try {
 
     Write-Host ""
     Write-Host "===== ENSEMBLE I HISTORICAL HOLDOUT MARKET PASS ====="
-    Write-Host "2004-2016 historical block is now being opened."
+    Write-Host "2005-2016 historical block is now being opened."
     Write-Host "2017-2025 will not be decoded."
     Write-Host "2026 will not be decoded."
     Write-Host "If console selection pauses the process, press Esc."
@@ -134,7 +134,7 @@ try {
     Write-Host "===== ENSEMBLE I COMPLETE ====="
     Write-Host "RUN: $Run"
     Write-Host "REPORT: $(Join-Path $Analysis 'ensemble_i_historical_analysis.json')"
-    Write-Host "2004-2016 ACCESSED: TRUE"
+    Write-Host "2005-2016 ACCESSED: TRUE"
     Write-Host "2017-2025 REREAD: FALSE"
     Write-Host "2026 ACCESSED: FALSE"
 }
