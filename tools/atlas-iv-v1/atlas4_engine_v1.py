@@ -194,7 +194,7 @@ class Atlas4:
             return
         base_bars = bars[:-1]
         rs = self.returns_from_bars(base_bars)
-        if len(rs) != 25:
+        if len(rs) != 24:
             return
         products = [abs(rs[i]) * abs(rs[i - 1]) for i in range(1, len(rs))]
         if not products:
