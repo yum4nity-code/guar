@@ -130,9 +130,9 @@ def admitted_rows(dl, pf, manifest_path: Path):
         raise dl.AdmissionError("no historical rows admitted")
 
     first_day = datetime.fromisoformat(selected[0]["date"]).replace(tzinfo=UTC)
-    if first_day > WARMUP_START:
+    if first_day >= datetime(2004, 2, 1, tzinfo=UTC):
         raise dl.AdmissionError(
-            f"historical payload starts too late: {first_day.isoformat()}"
+            f"historical payload lacks January 2004 warmup: {first_day.isoformat()}"
         )
 
     return selected
