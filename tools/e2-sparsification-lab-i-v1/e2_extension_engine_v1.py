@@ -120,7 +120,7 @@ def main():
         "family_emitted": "E2_DIVERSE_SCORE_5 only",
         "market_passes_planned": 1,
         "historical_2005_2016_reread": False,
-        "development_2017_2025_opened": True,
+        "development_2017_2025_will_open_on_execute": True,
         "protected_2026_opened": False,
         "dependency_sha256": hashes,
     }
