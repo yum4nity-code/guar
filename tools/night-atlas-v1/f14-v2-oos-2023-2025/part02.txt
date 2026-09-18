@@ -1,0 +1,174 @@
+        risk = 1.5 * atr
+        self.raw_signals += 1
+        self.pending.append(
+            Pending(
+                signal_time=sb.available_at,
+                entry_time=t,
+                entry=float(entry),
+                risk=risk,
+                sweep_atr=sweep,
+            )
+        )
+
+    def process_pending(self, bar: Bar):
+        keep = []
+        for p in self.pending:
+            p.age += 1
+            if p.age >= HORIZON:
+                pnl = bar.close - p.entry
+                self.completed.append({
+                    "signal_time": p.signal_time.isoformat(),
+                    "entry_time": p.entry_time.isoformat(),
+                    "year": p.entry_time.year,
+                    "entry": p.entry,
+                    "risk": p.risk,
+                    "sweep_atr": p.sweep_atr,
+                    "endpoint_price": bar.close,
+                    "endpoint_pnl_price": pnl,
+                    "endpoint_r": pnl / p.risk,
+                    "outcome_crossed_calendar_gap": p.crossed_gap,
+                    "outcome_max_gap_minutes": p.max_gap_minutes,
+                })
+            else:
+                keep.append(p)
+        self.pending = keep
+
+    def on_m1(self, bar: Bar):
+        self.roll_day(bar)
+        if self.prev_m1_timestamp is not None:
+            gap_minutes = int((bar.timestamp - self.prev_m1_timestamp).total_seconds() // 60)
+            if gap_minutes > 1:
+                for p in self.pending:
+                    p.crossed_gap = True
+                    p.max_gap_minutes = max(p.max_gap_minutes, gap_minutes - 1)
+        if bar.timestamp.minute % 5 == 0:
+            self.detect(bar.timestamp, bar.open)
+        self.process_pending(bar)
+        b5 = self.agg5.push(bar)
+        if b5:
+            self.after_m5(b5)
+        self.update_day(bar)
+        self.prev_m1_timestamp = bar.timestamp
+
+def stat(values):
+    xs = list(values)
+    if not xs:
+        return {"n": 0, "mean_r": None, "sum_r": None, "pf": None, "win_pct": None}
+    wins = sum(x for x in xs if x > 0)
+    losses = -sum(x for x in xs if x < 0)
+    return {
+        "n": len(xs),
+        "mean_r": sum(xs) / len(xs),
+        "sum_r": sum(xs),
+        "pf": wins / losses if losses > 0 else math.inf,
+        "win_pct": 100.0 * sum(x > 0 for x in xs) / len(xs),
+    }
+
+def non_overlap(rows):
+    out = []
+    next_allowed = None
+    for r in sorted(rows, key=lambda x: x["entry_time"]):
+        t = datetime.fromisoformat(r["entry_time"])
+        if next_allowed is None or t >= next_allowed:
+            out.append(r)
+            next_allowed = t + timedelta(minutes=HORIZON)
+    return out
+
+def freeze_spec(code_sha256: str, manifest_sha256: str):
+    return {
+        "schema": 1,
+        "id": ID,
+        "status": "FROZEN_BEFORE_OOS",
+        "frozen_at_rule": "before any 2023-2025 price bars are decoded by this script",
+        "symbol": SYMBOL,
+        "feed_type": FEED,
+        "direction": "LONG",
+        "signal": {
+            "base_family": "F14_PDAY_FAILED",
+            "base_rule": "closed M5 bar sweeps below previous UTC-day low and closes back at/above that low",
+            "atr": "Wilder ATR14 M5, closed causal bars",
+            "entry": "next M5 open",
+            "risk_normalization": "1.5 * Wilder ATR14 M5",
+            "min_risk": MIN_RISK,
+            "outcome_calendar_gap_required": False,
+            "horizon_market_minutes": HORIZON,
+            "selection_order": [
+                "complete all base F14 LONG 240m observations",
+                "exclude calendar-gap outcomes and risk < 0.01",
+                "apply 240 wall-clock minute non-overlap to BASE F14 stream",
+                "then keep 0.50 <= sweep_atr < 1.00",
+            ],
+            "sweep_atr": {"min_inclusive": SWEEP_MIN_ATR, "max_exclusive": SWEEP_MAX_ATR},
+        },
+        "costs": {"primary_price_cost": 0.10, "stress_price_cost": 0.20},
+        "oos": {
+            "start": OOS_START.isoformat(),
+            "end_exclusive": END_EXCLUSIVE.isoformat(),
+            "years": [2023, 2024, 2025],
+            "single_open": True,
+        },
+        "gate": GATE,
+        "no_post_oos_tuning": True,
+        "final_protected_2026_opened": False,
+        "code_sha256": code_sha256,
+        "manifest_sha256": manifest_sha256,
+    }
+
+def preflight(manifest: Path, standards: Path):
+    rows = list(admitted_rows(manifest))
+    for p in (
+        standards / "GUARDIAN_RESEARCH_PROTOCOL_V1.md",
+        standards / "TRADE_OBSERVATION_SCHEMA_V1.json",
+        standards / "guardian_observation_v1.py",
+    ):
+        if not p.is_file():
+            raise AdmissionError(f"missing research standard: {p}")
+    oos_days = sum(
+        OOS_START <= datetime.fromisoformat(r["date"]).replace(tzinfo=UTC) < END_EXCLUSIVE
+        for r in rows
+    )
+    return {
+        "status": "PREFLIGHT_ONLY",
+        "id": ID,
+        "index_rows_with_warmup": len(rows),
+        "oos_index_rows": oos_days,
+        "oos_start": OOS_START.isoformat(),
+        "oos_end_exclusive": END_EXCLUSIVE.isoformat(),
+        "oos_price_bars_decoded": False,
+        "protected_2026_opened": False,
+    }
+
+def run(manifest: Path, standards: Path, output_dir: Path, lock_path: Path):
+    if output_dir.exists():
+        raise AdmissionError(f"refusing overwrite: {output_dir}")
+    if lock_path.exists():
+        raise AdmissionError(f"OOS already opened or attempted: {lock_path}")
+
+    pf = preflight(manifest, standards)
+    output_dir.mkdir(parents=True)
+    code_hash = sha256_file(Path(__file__))
+    manifest_hash = canonical_manifest_sha256(manifest)
+
+    spec = freeze_spec(code_hash, manifest_hash)
+    spec_path = output_dir / "F14_V2_FROZEN_BEFORE_OOS.json"
+    spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    spec_hash = sha256_file(spec_path)
+
+    lock = {
+        "schema": 1,
+        "id": ID,
+        "status": "OPENING_OOS",
+        "oos_start": OOS_START.isoformat(),
+        "oos_end_exclusive": END_EXCLUSIVE.isoformat(),
+        "freeze_spec_sha256": spec_hash,
+        "code_sha256": code_hash,
+        "protected_2026_opened": False,
+    }
+    lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    rows = list(admitted_rows(manifest))
+    engine = Engine()
+    oos_days_seen = 0
+
+    try:
+        for i, row in enumerate(rows, 1):
