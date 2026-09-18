@@ -248,6 +248,16 @@ def main():
     sys.path.insert(0,str(campaign))
     na=importlib.import_module("night_atlas_v1")
 
+    if na.END_EXCLUSIVE != TEST_END_EXCLUSIVE:
+        raise RuntimeError("Night Atlas end wall mismatch")
+    for p in (
+        args.standards/"GUARDIAN_RESEARCH_PROTOCOL_V1.md",
+        args.standards/"TRADE_OBSERVATION_SCHEMA_V1.json",
+        args.standards/"guardian_observation_v1.py",
+    ):
+        if not p.is_file():
+            raise na.AdmissionError(f"missing research standard: {p}")
+
     rows=list(admitted_rows(na,args.manifest))
     pf={
         "status":"PREFLIGHT_ONLY",
